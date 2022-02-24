@@ -1,3 +1,4 @@
+-- to-do: rename this rational fraction
 create or alter function [Tools].[fn_ProperFraction](@Floating_Point_Number float)
 returns @ProperFraction table (
 	Integer_Part smallint,
