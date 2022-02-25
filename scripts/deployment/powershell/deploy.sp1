@@ -1,0 +1,94 @@
+#Import-Module SQLServer
+#Import-Module Az.Accounts -MinimumVersion 2.2.0
+
+process{
+
+	#Set variables from VstsFiles
+	[String]$serverName = $env:DB_ServerName
+	[String]$databaseName = $env:DB_DatabaseName
+	[String]$scriptsDirectory = $env:ScriptsDirectory
+
+	try{ 
+
+		Write-Output "ServerName: $serverName"
+		Write-Output "DatabaseName: $databaseName"
+		Write-Output "ScriptsDirectory: $scriptsDirectory"
+
+        Get-AzContext
+
+        $accessToken = (Get-AzAccessToken -ResourceUrl https://database.windows.net).Token
+
+		
+		Find-SqlFiles -accessToken $accessToken
+		Run-SqlFiles -accessToken $accessToken -sqlFiles $sqlFiles
+	}
+	catch [System.Management.Automation.CommandNotFoundException] {
+		if ($_.Exception.CommandName -ieq "Invoke-Sqlcmd") {
+			Write-Output "Run 'Install-Module SqlServer -AllowClobber -Force' on your agent Powershell prompt."
+		} elseif ($_.Exception.CommandName -ieq "Get-AzContext" -or $_.Exception.CommandName -ieq "Get-AzAccessToken") {
+			Write-Output "Run 'Get-InstalledModule Az' on your agent Powershell prompt."
+		}
+
+		if($_.Exception.Message) {Write-Error ($_.Exception.Message)}
+		else {Write-Error ($_.Exception)}
+
+		throw
+	}
+	catch [Exception] {
+		$errorMessage = ""
+		if($_.Exception.Message) {$errorMessage = $_.Exception.Message}
+		else {$errorMessage = $_.Exception.ToString()}
+
+		throw $errorMessage
+	}
+
+}
+
+begin{
+
+	function Run-SqlFiles {
+		param (
+			[string] $accessToken,
+			[array]  $sqlFiles
+		)
+		foreach ($sqlFile in $sqlFiles)
+		{
+			Write-Output "Executing $($sqlFile)"
+		    Invoke-Sqlcmd -ServerInstance $serverName -Database $databaseName -AccessToken $accesstoken -InputFile $sqlFile -ErrorAction 'Stop'
+		}
+	}
+	
+	
+	function Find-SqlFiles {
+		param (
+            [string] $accessToken
+			)
+
+		$maxchange = (Invoke-Sqlcmd -ServerInstance $serverName -Database $databaseName -AccessToken $accesstoken -Query "select max(Change_Number) from [dbo].[ChangeLog] WHERE complete_dt IS NOT NULL" -ErrorAction 'Stop')[0]
+		
+		if ($maxchange -is [System.DBNull]) {$maxchange = 0}
+		Write-Output "Max change from ChangeLog is $maxchange" #DEBUG#
+		
+		$SQLFolders = @("PreDeployment", "Scripts", "TypeTables", "Functions", "FunctionsDependent", "Views", "StoredProcedures", "Triggers", "SecurityGrants")
+		$sqlFiles = @()
+
+		foreach ($folder in $SQLFolders)
+		{
+			$scriptsdirectoryfolder = $scriptsdirectory + "\$folder"
+			if (Test-Path $scriptsdirectoryfolder)
+			{
+				if ($folder -eq "Scripts")
+				{
+					$sqlFiles = $sqlFiles + (Get-ChildItem $scriptsdirectoryfolder *.sql | Where {[int]$_.name.split('_')[0] -gt $maxchange}).fullname
+					$sqlFiles = $sqlFiles.Where({ $null -ne $_ })
+				}
+				else{
+					$sqlFiles = $sqlFiles + (Get-ChildItem $scriptsdirectoryfolder *.sql -Recurse).fullname
+				}
+			}
+		}
+
+		$script:sqlFiles = $sqlFiles
+	}
+
+}
