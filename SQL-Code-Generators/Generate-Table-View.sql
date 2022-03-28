@@ -59,20 +59,34 @@ while @ToDoList_ID <= (select MAX(ToDoList_ID) from @ToDoList) begin;
 
 	select @Refed_Table_Name = Table_Name, @Refed_Alias = Alias from @Table where Table_ID = @Refed_ID;
 
-	delete @RefedColumnList;
+	if not exists (
+		select * from sys.indexes i 
+		where i.[object_id] = @Refed_ID
+			and i.[type_desc] = 'NONCLUSTERED'
+			and i.is_unique = 1
+			and i.has_filter = 0
+	)
+	begin;
+		-- if there's no unique index, put the FK back into the column list.
+		insert @SelectColumn
+		select t.Alias + '.' + COL_NAME(fkc.parent_object_id, fkc.parent_column_id)
+		from sys.foreign_key_columns fkc
+		join @Table t on fkc.parent_object_id = t.Table_ID
+		where constraint_object_id = @FK_ID
+	end;
+	else begin;
+		delete @RefedColumnList;
 
-	-- columns in unique indexes
-	insert @RefedColumnList
-	select ic.column_id
-	from sys.indexes i
-	join sys.index_columns ic on i.[object_id] = ic.[object_id] and i.index_id = ic.index_id
-	where i.[object_id] = @Refed_ID
-		and i.is_unique = 1
-		and i.type_desc = 'NONCLUSTERED'
-		and i.has_filter = 0;
+		-- columns in unique indexes
+		insert @RefedColumnList
+		select ic.column_id
+		from sys.indexes i
+		join sys.index_columns ic on i.[object_id] = ic.[object_id] and i.index_id = ic.index_id
+		where i.[object_id] = @Refed_ID
+			and i.is_unique = 1
+			and i.type_desc = 'NONCLUSTERED'
+			and i.has_filter = 0;
 
-	-- if there's no unique index, skip it
-	if @@ROWCOUNT > 0 begin;
 		-- join in table on PK end of FK - the join could be on multiple columns
 		with t as (
 			select
