@@ -1,0 +1,11 @@
+erDiagram
+InvCtrl-Claim ||--|| RxTranInv-ClaimCredit : ""
+RxTranInv-ClaimCredit ||--o{ ReplenishedInvAlloc-Claim : "AllocRxTranInvID"
+RxTranInv-ClaimDebit ||--o{ ReplenishedInvAlloc-Claim : ""
+RxTran-Claim ||--|| RxTranInv-ClaimDebit : ""
+RxTran-Reverse |o--|| RxTran-Claim : RevRxTran
+RxTran-Reverse ||--|| RxTranInv-ReverseDebit : ""
+RxTranInv-ReverseDebit ||--o{ ReplenishedInvAlloc-Reverse : "AllocRxTranInvID"
+RxTranInv-ReverseCredit ||--o{ ReplenishedInvAlloc-Reverse : ""
+InvCtrl-Reverse ||--|| RxTranInv-ReverseCredit : ""
+
