@@ -1,3 +1,4 @@
+-- ============================================================================
 -- parse a comma separated list
 DECLARE @list VARCHAR(MAX) = 'Olivia, Emma, Charlotte'
 
@@ -5,6 +6,7 @@ DECLARE @xml XML = '<x>' + REPLACE(@list, ',', '</x><x>') + '</x>'
 
 SELECT LTRIM(c.value('.', 'varchar(max)')) FROM @xml.nodes('x') t (c)
 
+-- ============================================================================
 -- parse a comma separated list
 DECLARE @list VARCHAR(MAX) = 'Olivia, Emma, Charlotte'
 
