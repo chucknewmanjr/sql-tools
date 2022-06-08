@@ -20,4 +20,11 @@ declare @xml xml = '<x><a>1</a><b>2</b><c>3</c></x>'
 
 select c.value('fn:local-name(.)', 'char(1)') from @xml.nodes('x/*') t (c)
 
+-- ============================================================================
+-- get attribute value
+declare @xml xml = '<x><a type="11">1</a><a type="22">2</a><a type="33">3</a></x>'
+
+select c.value('@type', 'int') from @xml.nodes('x/a') t (c)
+
+
 
