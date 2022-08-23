@@ -2,14 +2,20 @@ IF OBJECT_ID('tempdb..#Reference') IS NOT NULL DROP TABLE #Reference;
 GO
 
 -- ================================================================
-DECLARE	@ObjectName sysname = 'WP340B.ClaimCalculation'; -- Proc or table.
-DECLARE @ExcludeCommonObjects BIT = 1;
+DECLARE	@EntityName sysname = 'WP340B.RxTranAuditInsert'; -- Proc or table.
 DECLARE @IncludeJobs BIT = 1;
+DECLARE @ExcludeCommonObjects BIT = 1;
 -- ================================================================
 
-DECLARE	@ObjectId INT = OBJECT_ID(@ObjectName);
+DECLARE	@EntityId INT = OBJECT_ID(@EntityName);
 
-SET @ObjectName = OBJECT_SCHEMA_NAME(@ObjectId) + '.' + OBJECT_NAME(@ObjectId); -- powerwash
+DECLARE @CommonObject TABLE (ObjectName sysname PRIMARY KEY);
+
+INSERT @CommonObject VALUES
+	('Utility.dbo.ExecutionLog'),
+	('Utility.dbo.LogExecution'),
+	('Utility.dbo.RethrowError'),
+	('CPDB.dbo.RethrowError');
 
 CREATE TABLE #Reference (
 	DatabaseId INT NOT NULL DEFAULT DB_ID(), -- Referenced (red) might be in another database.
@@ -17,67 +23,92 @@ CREATE TABLE #Reference (
 	RingId INT NULL, -- Null means it's a job.
 	RingName sysname NOT NULL, -- Ring is a proc in this db. Or it's a job.
 	IsCall BIT NOT NULL DEFAULT 0, -- Referencing calls a referenced proc.
-	IsUpdate BIT NOT NULL DEFAULT 0, -- Rows in referenced table get inserted, updated or deleted.
-	IsJob BIT NOT NULL DEFAULT 0 -- Referencing is a job.
+	IsJob BIT NOT NULL DEFAULT 0, -- Referencing is a job.
+	IsUpdate BIT NOT NULL DEFAULT 0 -- Rows in referenced table get inserted, updated or deleted.
 );
 
 -- ----------------------------------------------------
--- Referencing from sys.sql_expression_dependencies
+-- Collect all the procs that reference the entity.
 -- ----------------------------------------------------
-WITH Ring AS ( -- Recursive CTE
-	SELECT @ObjectId AS RedId, referencing_id AS RingId
-	FROM sys.sql_expression_dependencies
-	WHERE referenced_id = @ObjectId
-	UNION ALL
-    SELECT d.referenced_id, d.referencing_id
-	FROM Ring r
-	JOIN sys.sql_expression_dependencies d ON r.RingId = d.referenced_id
-)
+-- We don't know which of these do reads or writes or calls.
+-- We can't get the database of referencing entities.
 INSERT #Reference (RedId, RingId, RingName)
 SELECT 
-	RedId, 
-	RingId, 
-	OBJECT_SCHEMA_NAME(RingId) + '.' + OBJECT_NAME(RingId)
-FROM Ring;
+	@EntityId, 
+	referencing_id, 
+	OBJECT_SCHEMA_NAME(referencing_id) + '.' + OBJECT_NAME(referencing_id)
+FROM sys.sql_expression_dependencies
+WHERE referenced_id = @EntityId
 
 -- ----------------------------------------------------
--- Referencing from msdb.dbo.sysjobsteps
+-- Get tables from other databases plus get is_updated.
 -- ----------------------------------------------------
-IF @IncludeJobs = 1
-	INSERT #Reference (RedId, RingName, IsCall, IsJob)
-	SELECT DISTINCT r.RedId, j.[name] AS RingName, 1 AS IsCall, 1 AS IsJob -- Distinct ignores step details.
-	FROM #Reference r
-	JOIN msdb.dbo.sysjobsteps s
-		ON s.command LIKE '%' + DB_NAME() + '.' + OBJECT_SCHEMA_NAME(RingId) + '.' + OBJECT_NAME(RingId) + '%'
-		OR (
-			s.command LIKE '%' + OBJECT_SCHEMA_NAME(RingId) + '.' + OBJECT_NAME(RingId) + '%'
-			AND 
-			s.database_name = DB_NAME()
-		)
-	JOIN msdb.dbo.sysjobs j ON s.job_id = s.job_id
-
--- ----------------------------------------------------
--- Referenced from sys.dm_sql_referenced_entities
--- ----------------------------------------------------
+-- dm_sql_referenced_entities gives us those 2 more things.
+-- This will cause duplicates that get fixed down by @Label.
 BEGIN TRY;
+	WITH ring (RingId, RingName) AS (
+		-- the entity plus any procs that reference the entity
+		SELECT @EntityId, OBJECT_SCHEMA_NAME(@EntityId) + '.' + OBJECT_NAME(@EntityId)
+		UNION
+		SELECT RingId, RingName
+		FROM #Reference
+	)
 	INSERT #Reference (DatabaseId, RedId, RingId, RingName, IsUpdate)
-	SELECT DISTINCT -- Distinct ignores column details.
+	SELECT DISTINCT 
 		ISNULL(DB_ID(red.referenced_database_name), DB_ID()),
-		red.referenced_id,
-		@ObjectId,
-		@ObjectName,
-		MAX(red.is_updated * 1)
-	FROM sys.dm_sql_referenced_entities(@ObjectName, 'OBJECT') red
-	WHERE red.referenced_schema_name IS NOT NULL -- Avoids table variables.
+		red.referenced_id, 
+		ring.RingId, 
+		ring.RingName, 
+		red.is_updated
+	FROM ring
+	CROSS APPLY sys.dm_sql_referenced_entities(ring.RingName, 'OBJECT') AS red
+	WHERE @EntityId IN (red.referenced_id, ring.RingId)
+		AND red.referenced_schema_name IS NOT NULL -- Avoid table variables.
 		AND red.referenced_id IS NOT NULL -- This happens. i don't know why.
-		AND red.referenced_class_desc = 'OBJECT_OR_COLUMN' -- Avoids table valued parameters.
-	GROUP BY red.referenced_database_name, red.referenced_id;
+		AND red.referenced_class_desc = 'OBJECT_OR_COLUMN' -- Avoid table valued parameters.
 END TRY
 BEGIN CATCH;
 	-- Try-catch block gets around error 2020 out of sys.dm_sql_referenced_entities.
-	-- "The dependencies reported for entity might not include references to all columns."
+	-- "The dependencies reported might not include references to all columns."
 	PRINT ERROR_MESSAGE();
 END CATCH;
+
+-- ----------------------------------------------------
+-- Collect the chain of procs that call the entity.
+-- ----------------------------------------------------
+WITH Ring (RedId, RingId, RingName) AS ( -- Recursive CTE
+	SELECT RedId, RingId, RingName
+	FROM #Reference
+	WHERE DatabaseId = DB_ID() -- sql_expression_dependencies can't handle what's referenced from another db.
+	UNION ALL
+	SELECT
+		red.RingId,
+		ring.referencing_id,
+		CAST(OBJECT_SCHEMA_NAME(ring.referencing_id) + '.' + OBJECT_NAME(ring.referencing_id) AS sysname)
+	FROM Ring red
+	JOIN sys.sql_expression_dependencies ring ON red.RingId = ring.referenced_id
+)
+INSERT #Reference (RedId, RingId, RingName)
+SELECT RedId, RingId, RingName
+FROM Ring;
+
+-- ----------------------------------------------------
+-- Referencing from jobs
+-- ----------------------------------------------------
+IF @IncludeJobs = 1
+	INSERT #Reference (RedId, RingName, IsCall, IsJob)
+	--OUTPUT OBJECT_SCHEMA_NAME(inserted.RingId) + '.' + OBJECT_NAME(inserted.RingId), Inserted.*
+	SELECT DISTINCT r.RingId AS RedId, j.[name] AS RingName, 1 AS IsCall, 1 AS IsJob -- Distinct ignores step details.
+	FROM #Reference r
+	JOIN msdb.dbo.sysjobsteps s
+		ON s.command LIKE '%' + DB_NAME() + '.' + r.RingName + '%'
+		OR (
+			s.database_name = DB_NAME()
+			AND 
+			s.command LIKE '%' + r.RingName + '%'
+		)
+	JOIN msdb.dbo.sysjobs j ON s.job_id = j.job_id
+	WHERE r.DatabaseId = DB_ID()
 
 -- ---------------------------------------
 -- exclude common objects
@@ -85,13 +116,9 @@ END CATCH;
 IF @ExcludeCommonObjects = 1
 	DELETE targt
 	FROM #Reference targt
-	JOIN (VALUES
-		('Utility.dbo.LogExecution'),
-		('Utility.dbo.RethrowError'),
-		('CPDB.dbo.RethrowError')
-	) src (ProcName)
-		ON targt.DatabaseId = DB_ID(PARSENAME(src.ProcName, 3)) -- 3 means database name.
-		AND targt.RedId = OBJECT_ID(src.ProcName);
+	JOIN @CommonObject src
+		ON targt.DatabaseId = DB_ID(PARSENAME(src.ObjectName, 3)) -- 3 means database name.
+		AND targt.RedId = OBJECT_ID(src.ObjectName);
 
 -- ---------------------------------------
 -- set IsCall from object types
@@ -110,7 +137,12 @@ EXEC sys.sp_MSforeachdb '
 -- ---------------------------------------
 -- mermaid diagram labels
 -- ---------------------------------------
-DECLARE @Prefix TABLE (DatabaseId INT, ObjectId INT, ObjectName sysname, ObjectPrefix sysname);
+DECLARE @Prefix TABLE (
+	DatabaseId INT, 
+	ObjectId INT, 
+	ObjectName sysname, 
+	ObjectPrefix sysname
+);
 
 -- this database 
 INSERT @Prefix
@@ -139,30 +171,39 @@ GROUP BY DatabaseId, RedId;
 
 DECLARE @label TABLE (RedLabel sysname, RingLabel sysname, IsCall BIT, IsUpdate BIT);
 
+WITH ref AS (
+	-- 
+	SELECT DatabaseId, RedId, RingId, RingName, IsCall, IsJob, MAX(IsUpdate * 1) AS IsUpdate
+	FROM #Reference
+	GROUP BY DatabaseId, RedId, RingId, RingName, IsCall, IsJob
+)
 INSERT @label
 SELECT
 	CONCAT(
 		red.ObjectPrefix,
-		IIF(r.IsCall = 1, '([', '['),
-		DB_NAME(NULLIF(r.DatabaseId, DB_ID())) + '.',
-		OBJECT_SCHEMA_NAME(r.RedId, r.DatabaseId) + '.',
-		OBJECT_NAME(r.RedId, r.DatabaseId),
-		IIF(r.IsCall = 1, '])', ']')
+		IIF(ref.IsCall = 1, '([', '['),
+		DB_NAME(NULLIF(ref.DatabaseId, DB_ID())) + '.',
+		OBJECT_SCHEMA_NAME(ref.RedId, ref.DatabaseId) + '.',
+		OBJECT_NAME(ref.RedId, ref.DatabaseId),
+		IIF(ref.IsCall = 1, '])', ']')
 	),
 	CONCAT(
 		ring.ObjectPrefix,
-		IIF(r.IsJob = 1, '[\', '(['),
-		r.RingName,
-		IIF(r.IsJob = 1, '/]', '])')
+		IIF(ref.IsJob = 1, '[\', '(['),
+		ref.RingName,
+		IIF(ref.IsJob = 1, '/]', '])')
 	),
-	r.IsCall,
-	r.IsUpdate
-FROM #Reference r
-LEFT JOIN @Prefix red ON r.DatabaseId = red.DatabaseId AND r.RedId = red.ObjectId
-LEFT JOIN @Prefix ring ON r.RingName = ring.ObjectName;
+	ref.IsCall,
+	ref.IsUpdate
+FROM ref
+LEFT JOIN @Prefix red ON ref.DatabaseId = red.DatabaseId AND ref.RedId = red.ObjectId
+LEFT JOIN @Prefix ring ON ref.RingName = ring.ObjectName; -- Don't join on RingId. It's null for jobs
 
-WITH t AS (
-		SELECT 1 AS ord, 'graph LR' AS txt
+-- ---------------------------------------
+-- output
+-- ---------------------------------------
+WITH t (ord, txt) AS (
+		SELECT 1, 'graph LR'
 	UNION
 		-- the proc calls another proc
 		SELECT 2, RingLabel + ' -->|call| ' + RedLabel + ' %% call'
@@ -180,4 +221,3 @@ WITH t AS (
 		WHERE IsUpdate = 1
 )
 SELECT txt FROM t ORDER BY ord, txt
-
