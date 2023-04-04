@@ -36,9 +36,10 @@ with
 			is_nullable,
 			is_identity,
 			case
-				when max_length between 1 and 18 then 1
-				when max_length between 19 and 128 then 2
-				else 3
+				when max_length between 1 and 3 then 1
+				when max_length between 4 and 18 then 2
+				when max_length between 19 and 128 then 3
+				else 4
 			end as length_type
 		from #column
 	),
@@ -61,15 +62,17 @@ join (values
 	('num', 0, NULL, '[name], '),
 	('bin', 0, NULL, 'CONVERT(varchar(MAX), [name], 1), '),
 	('quo', 0, NULL, @4q + ', [name], ' + @4q + ', '),
-	('oth', 0, 1,    @4q + ', [name], ' + @4q + ', '), -- A quote is unlikely in 18 or fewer characters.
-	('oth', 0, 2,    'QUOTENAME([name], ' + @4q + '), '), -- QUOTENAME is nicer than REPLACE.
-	('oth', 0, 3,    @4q + ', REPLACE([name], ' + @4q + ', ' + @6q + '), ' + @4q + ', '),
+	('oth', 0, 1,    @4q + ', [name], ' + @4q + ', '),
+	('oth', 0, 2,    @4q + ', [name], ' + @4q + ', '), -- A quote is unlikely in 18 or fewer characters.
+	('oth', 0, 3,    'QUOTENAME([name], ' + @4q + '), '), -- QUOTENAME is nicer than REPLACE.
+	('oth', 0, 4,    @4q + ', REPLACE([name], ' + @4q + ', ' + @6q + '), ' + @4q + ', '),
 	('num', 1, NULL, 'ISNULL(CAST([name] AS varchar(MAX)), ''NULL''), '),
 	('bin', 1, NULL, 'ISNULL(CONVERT(varchar(MAX), [name], 1), ''NULL''), '),
 	('quo', 1, NULL, 'ISNULL(' + @4q + ' + CAST([name] AS varchar(MAX)) + ' + @4q + ', ''NULL''), '),
-	('oth', 1, 1,    'ISNULL(' + @4q + ' + [name] + ' + @4q + ', ''NULL''), '), -- A quote is unlikely in 18 or fewer characters.
-	('oth', 1, 2,    'ISNULL(QUOTENAME([name], ' + @4q + '), ''NULL''), '), -- QUOTENAME is nicer than REPLACE.
-	('oth', 1, 3,    'ISNULL(' + @4q + ' + REPLACE([name], ' + @4q + ', ' + @6q + ') + ' + @4q + ', ''NULL''), ')
+	('oth', 1, 1,    'ISNULL(' + @4q + ' + CAST([name] AS varchar(MAX)) + ' + @4q + ', ''NULL''), '), -- Too short to fit NULL. So recast.
+	('oth', 1, 2,    'ISNULL(' + @4q + ' + [name] + ' + @4q + ', ''NULL''), '), -- A quote is unlikely in 18 or fewer characters.
+	('oth', 1, 3,    'ISNULL(QUOTENAME([name], ' + @4q + '), ''NULL''), '), -- QUOTENAME is nicer than REPLACE.
+	('oth', 1, 4,    'ISNULL(' + @4q + ' + REPLACE([name], ' + @4q + ', ' + @6q + ') + ' + @4q + ', ''NULL''), ')
 ) template (grp, is_nullable, length_type, template)
 	on isnull(type_group.grp, 'oth') = template.grp 
 	and col.is_nullable = template.is_nullable 
