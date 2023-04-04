@@ -16,7 +16,7 @@ declare @Put_Your_Query_In_Here nvarchar(MAX) = '
 -- ==================================
 -- ==================================
 
-drop table if exists #column; -- drop table
+DROP TABLE IF EXISTS #column; -- drop table
 
 select top 0 * into #column from sys.columns; -- recreate the table
 
@@ -62,13 +62,13 @@ join (values
 	('bin', 0, NULL, 'CONVERT(varchar(MAX), [name], 1), '),
 	('quo', 0, NULL, @4q + ', [name], ' + @4q + ', '),
 	('oth', 0, 1,    @4q + ', [name], ' + @4q + ', '), -- A quote is unlikely in 18 or fewer characters.
-	('oth', 0, 2,    @4q + ', QUOTENAME([name]), ' + @4q + ', '), -- QUOTENAME is nicer.
+	('oth', 0, 2,    'QUOTENAME([name], ' + @4q + '), '), -- QUOTENAME is nicer than REPLACE.
 	('oth', 0, 3,    @4q + ', REPLACE([name], ' + @4q + ', ' + @6q + '), ' + @4q + ', '),
 	('num', 1, NULL, 'ISNULL(CAST([name] AS varchar(MAX)), ''NULL''), '),
 	('bin', 1, NULL, 'ISNULL(CONVERT(varchar(MAX), [name], 1), ''NULL''), '),
 	('quo', 1, NULL, 'ISNULL(' + @4q + ' + CAST([name] AS varchar(MAX)) + ' + @4q + ', ''NULL''), '),
 	('oth', 1, 1,    'ISNULL(' + @4q + ' + [name] + ' + @4q + ', ''NULL''), '), -- A quote is unlikely in 18 or fewer characters.
-	('oth', 1, 2,    'ISNULL(' + @4q + ' + QUOTENAME([name]) + ' + @4q + ', ''NULL''), '), -- QUOTENAME is nicer.
+	('oth', 1, 2,    'ISNULL(QUOTENAME([name], ' + @4q + '), ''NULL''), '), -- QUOTENAME is nicer than REPLACE.
 	('oth', 1, 3,    'ISNULL(' + @4q + ' + REPLACE([name], ' + @4q + ', ' + @6q + ') + ' + @4q + ', ''NULL''), ')
 ) template (grp, is_nullable, length_type, template)
 	on isnull(type_group.grp, 'oth') = template.grp 
