@@ -102,4 +102,8 @@ from @Result
 group by [Rows], PagePID
 order by 1, AvgValue;
 
+select page_count, avg_page_space_used_in_percent, record_count, avg_record_size_in_bytes
+from sys.dm_db_index_physical_stats(db_id('tempdb'), OBJECT_ID('tempdb.dbo.#Table'), null, null, 'DETAILED')
+where index_level = 0; -- leaf
+
 
