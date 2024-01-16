@@ -94,9 +94,10 @@ create or alter proc #p_dblog as
 		Context, 
 		[Page ID], 
 		[Slot ID], 
-		convert(varchar(12), [RowLog Contents 0], 1) as Bytes
+		convert(varchar(19), [RowLog Contents 0], 1) as Bytes
 	from tempdb.sys.fn_dblog(null, null) 
 	where AllocUnitId = @allocation_unit_id
+		AND Context NOT IN ('LCX_IAM', 'LCX_PFS', 'LCX_GAM')
 	order by 1
 go
 
@@ -132,7 +133,7 @@ WHILE @ThisValueID <= @MaxValueID BEGIN;
 END;
 go
 
-select * from sys.dm_db_index_physical_stats(db_id(), OBJECT_ID('#Table'), null, null, 'DETAILED')
+select * from sys.dm_db_index_physical_stats(db_id(), OBJECT_ID('#Table'), null, null, 'DETAILED');
 go
 
 select 
@@ -149,5 +150,4 @@ go
 
 exec #p_dblog;
 go
-
 
