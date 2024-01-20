@@ -1,31 +1,18 @@
 use [tempdb];
 go
 
-drop table if exists #Result;
+drop table if exists #PageDetail;
 go
 
-create table #Result ([Loop] int, InsertedValue int, PagePID int, PageValue int);
+create table #PageDetail ([Round] int, InsertedValue int, PagePID int, PageValue int);
 go
 
-create or alter proc #RecordValues (@Loop int, @InsertedValue int) as
+create or alter proc #RecordValues (@Round int, @InsertedValue int) as
 	-- @DBCCInd is for scooping up the results of the DBCC IND instruction.
-	declare @DBCCInd table (
-		DBCCIndID int identity primary key, -- The INSERT-EXEC does not write here because it's an IDENTITY.
-		PageFID int, 
-		PagePID int, 
-		IAMFID int, 
-		IAMPID int, 
-		ObjectID int, 
-		IndexID int, 
-		PartitionNumber int, 
-		PartitionID bigint, 
-		iam_chain_type sysname, 
-		PageType int, 
-		IndexLevel int, 
-		NextPageFID int, 
-		NextPagePID int, 
-		PrevPageFID int, 
-		PrevPagePID int
+	declare @page_allocation table (
+		page_allocation_id int identity primary key, -- The INSERT-EXEC does not write here because it's an IDENTITY.
+		allocated_page_file_id int,
+		allocated_page_page_id int
 	);
 
 	-- @DBCCPage is for scooping up the results of the DBCC PAGE instruction.
@@ -36,48 +23,38 @@ create or alter proc #RecordValues (@Loop int, @InsertedValue int) as
 		[VALUE] varchar(256)
 	);
 
-	-- For collecting all the results together.
-	declare @Result table (PagePID int, PageValue int); 
+	insert @page_allocation 
+	select allocated_page_file_id, allocated_page_page_id 
+	from sys.dm_db_database_page_allocations(db_id(), OBJECT_ID('#Table'), null, null, 'DETAILED') 
+	where page_type = 1;
 
 	-- redirect DBCC output to the console.
-	DBCC TRACEON(3604); 
+	DBCC TRACEON(3604);
 
-	-- DBCC IND gives us PageIDs and other metadata about each page in the index.
-	insert @DBCCInd exec ('dbcc ind(''tempdb'', ''dbo.#Table'', -1);');
-
-	declare @ThisDBCCIndID int = (select max(DBCCIndID) from @DBCCInd);
-	declare @PagePID int;
+	declare @this_page_allocation_id int = (select max(page_allocation_id) from @page_allocation);
+	declare @allocated_page_page_id int;
 	declare @SQL nvarchar(max);
-	declare @PageType int;
 
 	-- loop through the pages
-	while @ThisDBCCIndID > 0 begin;
+	while @this_page_allocation_id > 0 begin;
 		-- DBCC PAGE instruction gives us all the details in a page including the values.
 		select
-			@PagePID = PagePID, 
-			@SQL = concat('DBCC PAGE(''tempdb'', ', PageFID, ', ', PagePID, ', 3) WITH TABLERESULTS'),
-			@PageType = PageType
-		from @DBCCInd
-		where DBCCIndID = @ThisDBCCIndID;
+			@allocated_page_page_id = allocated_page_page_id, 
+			@SQL = concat('DBCC PAGE(''tempdb'', ', allocated_page_file_id, ', ', allocated_page_page_id, ', 3) WITH TABLERESULTS')
+		from @page_allocation
+		where page_allocation_id = @this_page_allocation_id;
 
-		-- @PageType 1 is a data page
-		if @PageType = 1 begin;
-			-- clear out the previous results
-			delete @DBCCPage
+		-- clear out the previous results
+		delete @DBCCPage
 
-			-- collect the new results
-			insert @DBCCPage exec (@SQL);
+		-- collect the new results
+		insert @DBCCPage exec (@SQL);
 
-			-- save up the PageIDs and values for the end
-			insert @Result select @PagePID, [VALUE] from @DBCCPage where Field = 'Value';
-		end;
+		-- save up the PageIDs and values for the end
+		insert #PageDetail select @Round, @InsertedValue, @allocated_page_page_id, [VALUE] from @DBCCPage where Field = 'Value';
 
-		set @ThisDBCCIndID -= 1;
+		set @this_page_allocation_id -= 1;
 	end;
-
-	insert #Result ([Loop], InsertedValue, PagePID, PageValue)
-	select @Loop, @InsertedValue, PagePID, PageValue
-	from @Result
 go
 
 create or alter proc #p_dblog as
@@ -131,19 +108,18 @@ go
 select * from sys.dm_db_index_physical_stats(db_id(), OBJECT_ID('#Table'), null, null, 'DETAILED');
 go
 
-select 
-	[Loop], 
-	InsertedValue, 
+select
+	[Round],
+	InsertedValue,
 	PagePID,
-	STRING_AGG(PageValue, ', ') within group (order by PageValue) as ValueList, 
+	STRING_AGG(PageValue, ', ') within group (order by PageValue) as ValueList,
 	COUNT(*) as ValueCount,
 	AVG(PageValue) as AvgValue
-from #Result
-group by [Loop], InsertedValue, PagePID
-order by [Loop], AvgValue;
+from #PageDetail
+group by [Round], InsertedValue, PagePID
+order by [Round], AvgValue;
 go
 
 exec #p_dblog;
 go
-
 
