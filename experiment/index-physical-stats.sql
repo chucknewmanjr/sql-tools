@@ -8,9 +8,8 @@ create table #PageDetail ([Round] int, InsertedValue int, PagePID int, PageValue
 go
 
 create or alter proc #RecordValues (@Round int, @InsertedValue int) as
-	-- @DBCCInd is for scooping up the results of the DBCC IND instruction.
 	declare @page_allocation table (
-		page_allocation_id int identity primary key, -- The INSERT-EXEC does not write here because it's an IDENTITY.
+		page_allocation_id int identity primary key,
 		allocated_page_file_id int,
 		allocated_page_page_id int
 	);
