@@ -98,10 +98,16 @@ go
 DROP TABLE IF EXISTS #Table;
 go
 
-CREATE TABLE #Table ([Value] INT PRIMARY KEY, String NVARCHAR(1000)); -- this has the pages we examine
+--CREATE TABLE #Table ([Value] INT PRIMARY KEY, String NVARCHAR(1000)); -- this has the pages we examine
 -- -- ===== FILL FACTOR experiment =====
---CREATE TABLE #Table ([Value] INT PRIMARY KEY with (fillfactor = 50), String NVARCHAR(1000));
-go
+CREATE TABLE #Table ([Value] INT PRIMARY KEY with (fillfactor = 50), String NVARCHAR(1000));
+GO
+
+/*
+	select * from sys.dm_db_database_page_allocations(db_id(), OBJECT_ID('#Table'), null, null, 'DETAILED');
+
+	DBCC PAGE('tempdb', 12, 3982228, 3) WITH TABLERESULTS
+*/
 
 declare @ValueList table (ValueID INT IDENTITY PRIMARY KEY, [Value] INT UNIQUE); -- list of values to insert
 
@@ -117,7 +123,7 @@ WHILE @ThisValueID <= @MaxValueID BEGIN;
 	-- insert a row and let's see where it goes.
 	-- Use "396" for 10 rows per page, "801" for 5.
 	-- (int(4) + nvarchar(801 * 2 + 2) + 9) * 5 + 107 = 8192
-	INSERT #Table SELECT @InsertedValue, REPLICATE('x', 801);
+	INSERT #Table SELECT @InsertedValue, REPLICATE('W', 801);
 
 	exec #RecordValues @ThisValueID, @InsertedValue;
 	
@@ -133,4 +139,3 @@ go
 
 exec #p_dblog; -- log of operations
 go
-
